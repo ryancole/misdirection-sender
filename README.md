@@ -36,7 +36,9 @@ misdirection-sender --list-ports
 
 What a run does:
 
-1. Reads and validates the whole file first. A malformed file sends nothing.
+1. Reads and validates the whole file first. A malformed file sends nothing. The file is
+   opened read-only with write sharing, so one a recorder still has open for appending
+   plays as it stood when the sender opened it.
 2. PINGs the device and checks it speaks the same protocol version.
 3. Sends `SCREEN_SIZE` if `--screen` was given, then every message in order at the
    pace recorded in the file (see Timing). Device-to-host messages in the file
