@@ -68,6 +68,21 @@ public sealed class CliTests : IDisposable
     }
 
     [Fact]
+    public async Task FileHeldOpenByARecorderCanStillBeRead()
+    {
+        var file = WriteFile(Tap);
+        // A recorder appends for the whole session and keeps the file open, the way
+        // ProtocolFileWriter.Append does; playing what it has written so far must not need it closed.
+        using var recorder = ProtocolFileWriter.Append(file);
+        var cli = new Cli(_out, _err, (_, _) => throw new InvalidOperationException("port opened"));
+
+        var code = await cli.RunAsync([file, "--dry-run"]);
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Contains("2 message(s)", _out.ToString());
+    }
+
+    [Fact]
     public async Task MalformedFileSendsNothing()
     {
         await using var device = new FakeDevice();

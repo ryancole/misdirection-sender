@@ -51,7 +51,7 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
         IReadOnlyList<(TimeSpan At, Message Message)> messages;
         try
         {
-            messages = ProtocolFile.ReadTimed(file);
+            messages = ReadTimed(file);
         }
         catch (Exception ex) when (ex is ProtocolFileException or IOException or UnauthorizedAccessException)
         {
@@ -173,6 +173,17 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
             return ExitCodes.Error;
         }
         return result.Nacks.Count > 0 ? ExitCodes.Nacked : ExitCodes.Ok;
+    }
+
+    /// <summary>
+    /// Reads the file's playback schedule. Opened read-only and sharing both read and write, so a
+    /// file a recorder still has open for appending can be played: the recorder flushes whole
+    /// frames, and what is read is the file as it stood at open.
+    /// </summary>
+    private static IReadOnlyList<(TimeSpan At, Message Message)> ReadTimed(string file)
+    {
+        using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return ProtocolFile.ReadTimed(stream, leaveOpen: true);
     }
 
     private static string Describe(string file, IReadOnlyList<(TimeSpan At, Message Message)> messages, SenderOptions options)
