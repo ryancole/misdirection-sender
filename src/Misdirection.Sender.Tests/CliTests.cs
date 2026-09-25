@@ -138,6 +138,45 @@ public sealed class CliTests : IDisposable
         Assert.Equal(Tap, device.ReceivedExceptPings);
     }
 
+    private string WriteTimedFile()
+    {
+        var path = Path.Combine(_dir, $"{Guid.NewGuid():N}.msdr");
+        using var writer = ProtocolFileWriter.Create(path);
+        writer.Write(Tap[0]);
+        writer.WriteDelay(TimeSpan.FromMilliseconds(150));
+        writer.Write(Tap[1]);
+        return path;
+    }
+
+    [Fact]
+    public async Task DelaysPaceTheSendAndNeverReachTheDevice()
+    {
+        await using var device = new FakeDevice();
+        var file = WriteTimedFile();
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var code = await CliFor(device).RunAsync([file, "-p", "COM9"]);
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.True(started.Elapsed >= TimeSpan.FromMilliseconds(150));
+        Assert.Equal([new PingMessage(), .. Tap, new PingMessage()], device.Received);
+        Assert.Contains("2 message(s) over 0.150s", _out.ToString());
+    }
+
+    [Fact]
+    public async Task DryRunShowsScheduleAtSpeed()
+    {
+        var file = WriteTimedFile();
+
+        var code = await new Cli(_out, _err).RunAsync([file, "--dry-run", "--speed", "2"]);
+
+        Assert.Equal(ExitCodes.Ok, code);
+        var output = _out.ToString();
+        Assert.Contains("over 0.075s at 2x (recorded 0.150s)", output);
+        Assert.Contains("0.075s  KeyUpMessage", output);
+        Assert.DoesNotContain("DelayMessage", output);
+    }
+
     [Fact]
     public async Task BadArgumentsExitWithUsageCode()
     {

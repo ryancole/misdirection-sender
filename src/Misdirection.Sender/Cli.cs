@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO.Ports;
 using Misdirection.Client;
 
@@ -47,10 +48,10 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
 
         // Read the whole file before touching the port, so a malformed file sends nothing at all.
         var file = options.File!;
-        IReadOnlyList<Message> messages;
+        IReadOnlyList<(TimeSpan At, Message Message)> messages;
         try
         {
-            messages = ProtocolFile.Read(file);
+            messages = ProtocolFile.ReadTimed(file);
         }
         catch (Exception ex) when (ex is ProtocolFileException or IOException or UnauthorizedAccessException)
         {
@@ -58,19 +59,31 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
             return ExitCodes.Error;
         }
 
-        var skipped = messages.Count(m => !m.IsHostToDevice);
+        // ReadTimed already consumes the delay records; what's left that the device won't take is
+        // anything recorded from the back-channel.
+        var skipped = messages.Count(m => !m.Message.IsHostToDevice);
         if (skipped > 0)
         {
             stderr.WriteLine($"warning: skipping {skipped} device-to-host message(s) (PONG/NACK); the device doesn't accept them.");
-            messages = [.. messages.Where(m => m.IsHostToDevice)];
+            messages = [.. messages.Where(m => m.Message.IsHostToDevice)];
         }
 
-        stdout.WriteLine($"{file}: {messages.Count} message(s)");
+        var settings = new SendSettings
+        {
+            Speed = options.Speed,
+            IgnoreTiming = options.IgnoreTiming,
+            MinimumGap = options.Delay,
+            ScreenSize = options.ScreenSize,
+            StopOnNack = !options.ContinueOnNack,
+            ConfirmTimeout = options.Ping ? TimeSpan.FromSeconds(2) : null,
+        };
+
+        stdout.WriteLine(Describe(file, messages, options));
 
         if (options.DryRun)
         {
             for (var i = 0; i < messages.Count; i++)
-                stdout.WriteLine($"{i + 1,6}  {messages[i]}");
+                stdout.WriteLine($"{i + 1,6}  {FormatTime(settings.Scheduled(messages[i].At))}  {messages[i].Message}");
             return ExitCodes.Ok;
         }
 
@@ -90,7 +103,7 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
         {
             try
             {
-                return await SendAsync(client, port, messages, options, ct);
+                return await SendAsync(client, port, messages, options, settings, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -106,7 +119,12 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
     }
 
     private async Task<int> SendAsync(
-        MisdirectionClient client, string port, IReadOnlyList<Message> messages, SenderOptions options, CancellationToken ct)
+        MisdirectionClient client,
+        string port,
+        IReadOnlyList<(TimeSpan At, Message Message)> messages,
+        SenderOptions options,
+        SendSettings settings,
+        CancellationToken ct)
     {
         if (options.Ping)
         {
@@ -129,15 +147,8 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
             stdout.WriteLine($"Connected to {port} (protocol v{version}).");
         }
 
-        var settings = new SendSettings
-        {
-            Delay = options.Delay,
-            ScreenSize = options.ScreenSize,
-            StopOnNack = !options.ContinueOnNack,
-            ConfirmTimeout = options.Ping ? TimeSpan.FromSeconds(2) : null,
-        };
-        Action<int, Message>? onSent = options.Verbose
-            ? (n, m) => stdout.WriteLine($"{n,6}  {m}")
+        Action<int, TimeSpan, Message>? onSent = options.Verbose
+            ? (n, at, m) => stdout.WriteLine($"{n,6}  {FormatTime(at)}  {m}")
             : null;
 
         var result = await MessageSender.SendAsync(client, messages, settings, onSent, ct);
@@ -163,6 +174,20 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
         }
         return result.Nacks.Count > 0 ? ExitCodes.Nacked : ExitCodes.Ok;
     }
+
+    private static string Describe(string file, IReadOnlyList<(TimeSpan At, Message Message)> messages, SenderOptions options)
+    {
+        var text = $"{file}: {messages.Count} message(s)";
+        if (messages.Count == 0 || options.IgnoreTiming)
+            return text;
+        text += $" over {FormatTime(messages[^1].At / options.Speed)}";
+        if (options.Speed != 1)
+            text += $" at {options.Speed.ToString(CultureInfo.InvariantCulture)}x (recorded {FormatTime(messages[^1].At)})";
+        return text;
+    }
+
+    private static string FormatTime(TimeSpan t) =>
+        t.TotalSeconds.ToString("0.000", CultureInfo.InvariantCulture) + "s";
 
     private int ListPorts()
     {

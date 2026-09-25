@@ -5,8 +5,14 @@ namespace Misdirection.Sender;
 
 internal sealed record SendSettings
 {
-    /// <summary>Pause after each message.</summary>
-    public TimeSpan Delay { get; init; }
+    /// <summary>Playback rate for the file's timing: 2 plays twice as fast, 0.5 half as fast.</summary>
+    public double Speed { get; init; } = 1;
+
+    /// <summary>Send without waiting for the file's timing; only <see cref="MinimumGap"/> paces.</summary>
+    public bool IgnoreTiming { get; init; }
+
+    /// <summary>Least time between the starts of consecutive messages, applied on top of the file's timing.</summary>
+    public TimeSpan MinimumGap { get; init; }
 
     /// <summary>Sent before the first message when set.</summary>
     public (ushort Width, ushort Height)? ScreenSize { get; init; }
@@ -20,6 +26,9 @@ internal sealed record SendSettings
     /// NACK they caused has already arrived.
     /// </summary>
     public TimeSpan? ConfirmTimeout { get; init; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>When the message recorded at <paramref name="at"/> is due, before the minimum gap is applied.</summary>
+    public TimeSpan Scheduled(TimeSpan at) => IgnoreTiming ? TimeSpan.Zero : at / Speed;
 }
 
 internal enum SendStatus
@@ -42,14 +51,19 @@ internal readonly record struct ReceivedNack(NackReason Reason, int SentBefore);
 
 internal sealed record SendResult(SendStatus Status, int Sent, IReadOnlyList<ReceivedNack> Nacks, bool? Confirmed);
 
-/// <summary>Writes a message sequence to a connected client, watching the back-channel for NACKs.</summary>
+/// <summary>
+/// Plays a timed message sequence to a connected client, watching the back-channel for NACKs. Each
+/// message's <c>At</c> is its offset from the start of playback, as <see cref="ProtocolFile.ReadTimed(string)"/>
+/// yields it.
+/// </summary>
 internal static class MessageSender
 {
+    /// <param name="onSent">Called after each message with its 1-based position and when it went out.</param>
     public static async Task<SendResult> SendAsync(
         MisdirectionClient client,
-        IReadOnlyList<Message> messages,
+        IReadOnlyList<(TimeSpan At, Message Message)> messages,
         SendSettings settings,
-        Action<int, Message>? onSent = null,
+        Action<int, TimeSpan, Message>? onSent = null,
         CancellationToken ct = default)
     {
         var sent = 0;
@@ -62,17 +76,23 @@ internal static class MessageSender
             if (settings.ScreenSize is var (width, height))
                 await client.ScreenSizeAsync(width, height, ct);
 
-            foreach (var message in messages)
+            var clock = new PlaybackClock();
+            TimeSpan? previous = null;
+            foreach (var (at, message) in messages)
             {
+                var due = settings.Scheduled(at);
+                if (previous is { } p && p + settings.MinimumGap > due)
+                    due = p + settings.MinimumGap;
+                await clock.WaitUntilAsync(due, ct);
+
                 if (settings.StopOnNack && !nacks.IsEmpty)
                     return await AbortAsync(SendStatus.Nacked, confirmed: null);
 
+                var sentAt = clock.Elapsed;
                 await client.SendAsync(message, ct);
                 Interlocked.Increment(ref sent);
-                onSent?.Invoke(sent, message);
-
-                if (settings.Delay > TimeSpan.Zero)
-                    await Task.Delay(settings.Delay, ct);
+                previous = sentAt;
+                onSent?.Invoke(sent, sentAt, message);
             }
 
             bool? confirmed = null;
