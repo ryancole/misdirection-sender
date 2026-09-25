@@ -10,6 +10,8 @@ internal sealed record SenderOptions
     public string? Port { get; init; }
     public int BaudRate { get; init; } = Protocol.DefaultBaudRate;
     public TimeSpan Delay { get; init; }
+    public double Speed { get; init; } = 1;
+    public bool IgnoreTiming { get; init; }
     public (ushort Width, ushort Height)? ScreenSize { get; init; }
     public bool ContinueOnNack { get; init; }
     public bool Ping { get; init; } = true;
@@ -31,14 +33,16 @@ internal static class OptionsParser
           misdirection-sender <file.msdr> --dry-run
           misdirection-sender --list-ports
 
-        Sends every message in a .msdr protocol file to a misdirection device, in order.
+        Sends every message in a .msdr protocol file to a misdirection device, in order, at
+        the pace recorded in the file's delay records.
 
         Options:
           -p, --port <name>       Serial port the device is on, e.g. COM5
           -b, --baud <rate>       Baud rate (default 115200)
-          -d, --delay <ms>        Pause between messages in milliseconds (default 0). The file
-                                  carries no timing, so this is the only pacing. Windows timer
-                                  resolution makes small values round up to ~15 ms.
+          -x, --speed <factor>    Playback speed: 2 is twice as fast, 0.5 half speed (default 1)
+              --ignore-timing     Ignore the file's delays and send as fast as --delay allows
+          -d, --delay <ms>        Minimum milliseconds between messages (default 0). Applies on
+                                  top of the file's timing, and alone with --ignore-timing.
           -s, --screen <WxH>      Send SCREEN_SIZE first, e.g. 2560x1440
               --continue-on-nack  Keep sending after the device NACKs (default: stop and PANIC)
               --no-ping           Skip the PING handshake before sending and the PING that
@@ -76,6 +80,12 @@ internal static class OptionsParser
                     if (!int.TryParse(ms, NumberStyles.None, CultureInfo.InvariantCulture, out var delay))
                         throw new UsageException($"{arg} expects a whole number of milliseconds, got '{ms}'.");
                     o = o with { Delay = TimeSpan.FromMilliseconds(delay) };
+                    break;
+                case "-x" or "--speed":
+                    o = o with { Speed = PositiveDouble(Value(), arg) };
+                    break;
+                case "--ignore-timing":
+                    o = o with { IgnoreTiming = true };
                     break;
                 case "-s" or "--screen":
                     o = o with { ScreenSize = ParseScreenSize(Value()) };
@@ -124,6 +134,14 @@ internal static class OptionsParser
     {
         if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var n) || n == 0)
             throw new UsageException($"{option} expects a positive whole number, got '{value}'.");
+        return n;
+    }
+
+    private static double PositiveDouble(string value, string option)
+    {
+        if (!double.TryParse(value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var n)
+            || n <= 0 || !double.IsFinite(n))
+            throw new UsageException($"{option} expects a positive number, got '{value}'.");
         return n;
     }
 

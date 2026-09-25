@@ -7,7 +7,7 @@ public class OptionsParserTests
     {
         var o = OptionsParser.Parse(
             ["drag.msdr", "-p", "COM5", "--baud", "9600", "-d", "25", "--screen", "2560x1440",
-             "--continue-on-nack", "--no-ping", "-v"]);
+             "--continue-on-nack", "--no-ping", "-v", "--speed", "1.5", "--ignore-timing"]);
 
         Assert.Equal("drag.msdr", o.File);
         Assert.Equal("COM5", o.Port);
@@ -17,6 +17,8 @@ public class OptionsParserTests
         Assert.True(o.ContinueOnNack);
         Assert.False(o.Ping);
         Assert.True(o.Verbose);
+        Assert.Equal(1.5, o.Speed);
+        Assert.True(o.IgnoreTiming);
     }
 
     [Fact]
@@ -29,6 +31,8 @@ public class OptionsParserTests
         Assert.Equal(TimeSpan.Zero, o.Delay);
         Assert.Null(o.ScreenSize);
         Assert.Equal(115200, o.BaudRate);
+        Assert.Equal(1, o.Speed);
+        Assert.False(o.IgnoreTiming);
     }
 
     [Fact]
@@ -54,6 +58,9 @@ public class OptionsParserTests
     [InlineData(new[] { "a.msdr", "--port" }, "--port needs a value")]
     [InlineData(new[] { "a.msdr", "-p", "COM1", "-d", "-5" }, "whole number of milliseconds")]
     [InlineData(new[] { "a.msdr", "-p", "COM1", "-b", "0" }, "positive whole number")]
+    [InlineData(new[] { "a.msdr", "-p", "COM1", "-x", "0" }, "positive number")]
+    [InlineData(new[] { "a.msdr", "-p", "COM1", "-x", "-2" }, "positive number")]
+    [InlineData(new[] { "a.msdr", "-p", "COM1", "-x", "fast" }, "positive number")]
     [InlineData(new[] { "a.msdr", "-p", "COM1", "-s", "1920" }, "WIDTHxHEIGHT")]
     [InlineData(new[] { "a.msdr", "-p", "COM1", "-s", "100x1080" }, "128..7680")]
     public void RejectsBadCommandLines(string[] args, string expected)
