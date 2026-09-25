@@ -1,0 +1,3 @@
+[submodule "submodules/misdirection-client"]
+	path = submodules/misdirection-client
+	url = https://github.com/ryancole/misdirection-client.git

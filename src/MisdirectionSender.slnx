@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/submodules/">
+    <Project Path="../submodules/misdirection-client/src/Misdirection.Client/Misdirection.Client.csproj" />
+  </Folder>
+  <Project Path="Misdirection.Sender.Tests/Misdirection.Sender.Tests.csproj" />
+  <Project Path="Misdirection.Sender/Misdirection.Sender.csproj" />
+</Solution>

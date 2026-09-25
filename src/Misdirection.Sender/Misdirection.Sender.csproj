@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>Misdirection.Sender</RootNamespace>
+    <AssemblyName>misdirection-sender</AssemblyName>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Description>Replays a .msdr protocol file to a misdirection device over serial.</Description>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\submodules\misdirection-client\src\Misdirection.Client\Misdirection.Client.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Misdirection.Sender.Tests" />
+  </ItemGroup>
+
+</Project>
