@@ -153,6 +153,35 @@ public sealed class CliTests : IDisposable
         Assert.Equal(Tap, device.ReceivedExceptPings);
     }
 
+    [Fact]
+    public async Task ByDefaultEachButtonsMessageIsPrefixedWithTheLastMove()
+    {
+        await using var device = new FakeDevice();
+        var move = new MouseMoveMessage(100, 100);
+        var press = new MouseButtonsMessage(MouseButtons.Left);
+        var release = new MouseButtonsMessage(MouseButtons.None);
+        var file = WriteFile([move, Tap[0], press, release]);
+
+        var code = await CliFor(device).RunAsync([file, "-p", "COM9"]);
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Equal([move, Tap[0], move, press, move, release], device.ReceivedExceptPings);
+        Assert.Contains("6 message(s)", _out.ToString());
+    }
+
+    [Fact]
+    public async Task NoMoveBeforeClickSendsTheFileAsIs()
+    {
+        await using var device = new FakeDevice();
+        Message[] messages = [new MouseMoveMessage(100, 100), Tap[0], new MouseButtonsMessage(MouseButtons.Left)];
+        var file = WriteFile(messages);
+
+        var code = await CliFor(device).RunAsync([file, "-p", "COM9", "--no-move-before-click"]);
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Equal(messages, device.ReceivedExceptPings);
+    }
+
     private string WriteTimedFile()
     {
         var path = Path.Combine(_dir, $"{Guid.NewGuid():N}.msdr");

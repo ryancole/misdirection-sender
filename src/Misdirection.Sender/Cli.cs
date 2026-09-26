@@ -68,6 +68,9 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
             messages = [.. messages.Where(m => m.Message.IsHostToDevice)];
         }
 
+        if (options.MoveBeforeClick)
+            messages = MoveBeforeClick.Apply(messages);
+
         var settings = new SendSettings
         {
             Speed = options.Speed,

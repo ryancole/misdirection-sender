@@ -29,6 +29,7 @@ misdirection-sender --list-ports
 | `-d, --delay <ms>` | Minimum time between messages (default 0) |
 | `-s, --screen <WxH>` | Send `SCREEN_SIZE` before the file's messages |
 | `--continue-on-nack` | Keep going after a NACK instead of stopping |
+| `--no-move-before-click` | Don't repeat the last `MOUSE_MOVE` before each `MOUSE_BUTTONS` message |
 | `--no-ping` | Skip the PING handshake and the confirming PING at the end |
 | `-n, --dry-run` | Validate the file and list its messages; no port is opened |
 | `-v, --verbose` | Print each message as it is sent |
@@ -45,6 +46,15 @@ What a run does:
    (PONG/NACK) are skipped.
 4. PINGs again. The firmware handles frames in order, so the PONG confirms every message
    was processed and any NACK they caused has arrived.
+
+By default, every `MOUSE_BUTTONS` message (press or release) is preceded by a `MOUSE_MOVE`
+repeating the last absolute position the file moved to, sent at the same scheduled time,
+so the click lands where it was recorded even if the target lost track of the pointer in
+between. `--no-move-before-click` sends the file as it is. A click before the file's first
+`MOUSE_MOVE`, or after a `MOUSE_MOVE_REL` (which leaves the pointer at a position the file
+can't name), is sent as is. A click the file already puts right after that move gets no
+extra one. The inserted moves count as messages: they show in `--dry-run` and `--verbose`
+output, and `--delay` applies between a move and its click.
 
 On a NACK, or on Ctrl+C, it stops and sends `PANIC` so no key or button is left held.
 NACKs arrive asynchronously, so the report gives how many messages had been sent when one
@@ -81,6 +91,7 @@ src/
     Cli.cs                     load file, open port, handshake, report
     SenderOptions.cs           options record and command-line parser
     MessageSender.cs           send loop: scheduling, NACK watch, confirm PING, PANIC on abort
+    MoveBeforeClick.cs         insert a MOUSE_MOVE before each MOUSE_BUTTONS (off with --no-move-before-click)
     PlaybackClock.cs           single-clock waits: sleep, then spin the last 20 ms
   Misdirection.Sender.Tests/   xunit; FakeDevice stands in for the firmware
 submodules/
