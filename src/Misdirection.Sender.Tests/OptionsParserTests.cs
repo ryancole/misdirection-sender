@@ -7,7 +7,7 @@ public class OptionsParserTests
     {
         var o = OptionsParser.Parse(
             ["drag.msdr", "-p", "COM5", "--baud", "9600", "-d", "25", "--screen", "2560x1440",
-             "--continue-on-nack", "--no-ping", "-v", "--speed", "1.5", "--ignore-timing"]);
+             "--continue-on-nack", "--no-ping", "-v", "--speed", "1.5", "--ignore-timing", "--no-move-before-click"]);
 
         Assert.Equal("drag.msdr", o.File);
         Assert.Equal("COM5", o.Port);
@@ -19,6 +19,7 @@ public class OptionsParserTests
         Assert.True(o.Verbose);
         Assert.Equal(1.5, o.Speed);
         Assert.True(o.IgnoreTiming);
+        Assert.False(o.MoveBeforeClick);
     }
 
     [Fact]
@@ -33,6 +34,7 @@ public class OptionsParserTests
         Assert.Equal(115200, o.BaudRate);
         Assert.Equal(1, o.Speed);
         Assert.False(o.IgnoreTiming);
+        Assert.True(o.MoveBeforeClick);
     }
 
     [Fact]

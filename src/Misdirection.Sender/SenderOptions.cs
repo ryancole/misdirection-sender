@@ -14,6 +14,7 @@ internal sealed record SenderOptions
     public bool IgnoreTiming { get; init; }
     public (ushort Width, ushort Height)? ScreenSize { get; init; }
     public bool ContinueOnNack { get; init; }
+    public bool MoveBeforeClick { get; init; } = true;
     public bool Ping { get; init; } = true;
     public bool DryRun { get; init; }
     public bool Verbose { get; init; }
@@ -45,6 +46,10 @@ internal static class OptionsParser
                                   top of the file's timing, and alone with --ignore-timing.
           -s, --screen <WxH>      Send SCREEN_SIZE first, e.g. 2560x1440
               --continue-on-nack  Keep sending after the device NACKs (default: stop and PANIC)
+              --no-move-before-click
+                                  Don't send a MOUSE_MOVE to the last absolute position before
+                                  every MOUSE_BUTTONS message (default: send one, so each click
+                                  lands where it was recorded)
               --no-ping           Skip the PING handshake before sending and the PING that
                                   confirms delivery afterwards
           -n, --dry-run           Validate the file and list its messages; no port is opened
@@ -92,6 +97,9 @@ internal static class OptionsParser
                     break;
                 case "--continue-on-nack":
                     o = o with { ContinueOnNack = true };
+                    break;
+                case "--no-move-before-click":
+                    o = o with { MoveBeforeClick = false };
                     break;
                 case "--no-ping":
                     o = o with { Ping = false };
