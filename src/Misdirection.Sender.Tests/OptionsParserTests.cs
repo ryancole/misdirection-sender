@@ -46,6 +46,15 @@ public class OptionsParserTests
     }
 
     [Fact]
+    public void FollowAndFromStart()
+    {
+        var o = OptionsParser.Parse(["a.msdr", "-p", "COM1", "-f", "--from-start"]);
+        Assert.True(o.Follow);
+        Assert.True(o.FromStart);
+        Assert.False(OptionsParser.Parse(["a.msdr", "-p", "COM1"]).Follow);
+    }
+
+    [Fact]
     public void HelpAndListPortsNeedNoFile()
     {
         Assert.True(OptionsParser.Parse(["--help"]).Help);
@@ -65,6 +74,8 @@ public class OptionsParserTests
     [InlineData(new[] { "a.msdr", "-p", "COM1", "-x", "fast" }, "positive number")]
     [InlineData(new[] { "a.msdr", "-p", "COM1", "-s", "1920" }, "WIDTHxHEIGHT")]
     [InlineData(new[] { "a.msdr", "-p", "COM1", "-s", "100x1080" }, "128..7680")]
+    [InlineData(new[] { "a.msdr", "-p", "COM1", "--from-start" }, "only applies with --follow")]
+    [InlineData(new[] { "a.msdr", "-p", "COM1", "--follow", "-x", "2" }, "--speed has no effect with --follow")]
     public void RejectsBadCommandLines(string[] args, string expected)
     {
         var ex = Assert.Throws<UsageException>(() => OptionsParser.Parse(args));

@@ -17,6 +17,7 @@ git submodule update --init
 ```
 misdirection-sender <file.msdr> --port <name> [options]
 misdirection-sender <file.msdr> --dry-run
+misdirection-sender <file.msdr> --follow --port <name> [options]
 misdirection-sender --list-ports
 ```
 
@@ -26,12 +27,14 @@ misdirection-sender --list-ports
 | `-b, --baud <rate>` | Baud rate (default 115200) |
 | `-x, --speed <factor>` | Playback speed: `2` is twice as fast, `0.5` half speed (default 1) |
 | `--ignore-timing` | Ignore the file's delays and send as fast as `--delay` allows |
+| `-f, --follow` | Send each message as it's appended to the file, like `tail -f` (see Follow) |
+| `--from-start` | With `--follow`, send what the file already holds first |
 | `-d, --delay <ms>` | Minimum time between messages (default 0) |
 | `-s, --screen <WxH>` | Send `SCREEN_SIZE` before the file's messages |
 | `--continue-on-nack` | Keep going after a NACK instead of stopping |
 | `--no-move-before-click` | Don't repeat the last `MOUSE_MOVE` before each `MOUSE_BUTTONS` message |
 | `--no-ping` | Skip the PING handshake and the confirming PING at the end |
-| `-n, --dry-run` | Validate the file and list its messages; no port is opened |
+| `-n, --dry-run` | Validate the file and list its messages; no port is opened. With `--follow`, lists them as they're appended |
 | `-v, --verbose` | Print each message as it is sent |
 | `--list-ports` | List serial ports |
 
@@ -61,6 +64,26 @@ NACKs arrive asynchronously, so the report gives how many messages had been sent
 arrived; the message that caused it is at or before that position.
 
 Exit codes: `0` sent, `1` error, `2` bad arguments, `3` device NACKed, `130` cancelled.
+
+## Follow
+
+`--follow` treats the file as a stream: it keeps the file open and sends each message
+as soon as it's appended (for example by a recorder that's still running), until Ctrl+C
+or a NACK. The file's `FILE_DELAY` records are ignored, so `--speed` can't be combined
+with it; `--delay` still sets a minimum gap.
+
+- The messages already in the file are read and validated first, before the port is
+  opened, and then skipped. `--from-start` sends them first instead. Either way, the last
+  `MOUSE_MOVE` among them is what a later click gets moved to.
+- At the end of the file it checks again every timer tick (~15.6 ms on Windows), so a
+  message goes out within about that long of landing. A header or frame cut short at the
+  end is waited out, not treated as an error.
+- If the file gets shorter than what has been read (the recorder re-created it), reading
+  restarts from its header, as `tail -f` does.
+- A malformed frame stops the run with an error and a `PANIC`.
+- A NACK stops the run straight away, even while waiting for the file to grow. Ctrl+C
+  sends `PANIC` and exits with `130`, the normal way to end a follow. The confirming PING
+  isn't sent, since there's no last message.
 
 ## Timing
 
@@ -92,6 +115,7 @@ src/
     SenderOptions.cs           options record and command-line parser
     MessageSender.cs           send loop: scheduling, NACK watch, confirm PING, PANIC on abort
     MoveBeforeClick.cs         insert a MOUSE_MOVE before each MOUSE_BUTTONS (off with --no-move-before-click)
+    FileFollower.cs            tail -f for a .msdr file: yield messages as they're appended
     PlaybackClock.cs           single-clock waits: sleep, then spin the last 20 ms
   Misdirection.Sender.Tests/   xunit; FakeDevice stands in for the firmware
 submodules/
