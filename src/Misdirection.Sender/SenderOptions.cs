@@ -41,6 +41,9 @@ internal static class OptionsParser
         the pace recorded in the file's delay records. With --follow, sends each message as it
         is appended to the file instead, like tail -f, until Ctrl+C.
 
+        In place of a file you can give a folder: the .msdr file in it written most recently
+        is used.
+
         Options:
           -p, --port <name>       Serial port the device is on, e.g. COM5
           -b, --baud <rate>       Baud rate (default 115200)
@@ -133,7 +136,7 @@ internal static class OptionsParser
                     if (arg.Length > 1 && arg.StartsWith('-'))
                         throw new UsageException($"Unknown option '{arg}'.");
                     if (o.File is not null)
-                        throw new UsageException($"Unexpected argument '{arg}'; give one file to send.");
+                        throw new UsageException($"Unexpected argument '{arg}'; give one file or folder to send.");
                     o = o with { File = arg };
                     break;
             }
@@ -148,7 +151,7 @@ internal static class OptionsParser
 
         if (o.Help || o.ListPorts) return o;
         if (o.File is null)
-            throw new UsageException("No file given.");
+            throw new UsageException("No file or folder given.");
         if (o.Port is null && !o.DryRun)
             throw new UsageException("No serial port given. Pass --port (see --list-ports), or --dry-run to only inspect the file.");
         if (o.FromStart && !o.Follow)

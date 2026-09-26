@@ -21,6 +21,11 @@ misdirection-sender <file.msdr> --follow --port <name> [options]
 misdirection-sender --list-ports
 ```
 
+In place of `<file.msdr>` you can give a folder: the sender uses the `.msdr` file directly
+in it with the most recent last-write time (ties go to the later name) and prints which one.
+The folder is looked at once, at startup; with `--follow`, a newer file created later isn't
+switched to.
+
 | Option | |
 |---|---|
 | `-p, --port <name>` | Serial port the device is on, e.g. `COM5` |

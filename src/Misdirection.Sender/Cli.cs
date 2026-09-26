@@ -48,6 +48,27 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
         if (options.ListPorts)
             return ListPorts();
 
+        if (Directory.Exists(options.File))
+        {
+            string? latest;
+            try
+            {
+                latest = LatestRecording(options.File);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                stderr.WriteLine($"error: {options.File}: {ex.Message}");
+                return ExitCodes.Error;
+            }
+            if (latest is null)
+            {
+                stderr.WriteLine($"error: {options.File}: no .msdr files in the folder.");
+                return ExitCodes.Error;
+            }
+            stdout.WriteLine($"Using {latest}, the most recently written .msdr file in {options.File}.");
+            options = options with { File = latest };
+        }
+
         return options.Follow
             ? await FollowAsync(options, ct)
             : await PlayAsync(options, ct);
@@ -312,6 +333,18 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
         using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         return ProtocolFile.ReadTimed(stream, leaveOpen: true);
     }
+
+    /// <summary>
+    /// The <c>.msdr</c> file directly in <paramref name="folder"/> written to most recently, or null if
+    /// it holds none. Ties go to the later name, so numbered or timestamped names pick the newest.
+    /// </summary>
+    internal static string? LatestRecording(string folder) =>
+        new DirectoryInfo(folder)
+            .EnumerateFiles("*.msdr")
+            .OrderByDescending(f => f.LastWriteTimeUtc)
+            .ThenByDescending(f => f.Name, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault()
+            ?.FullName;
 
     private static string Describe(string file, IReadOnlyList<(TimeSpan At, Message Message)> messages, SenderOptions options)
     {
