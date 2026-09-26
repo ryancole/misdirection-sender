@@ -142,6 +142,42 @@ public class MessageSenderTests
     }
 
     [Fact]
+    public async Task NackEndsAWaitAtOnce()
+    {
+        // The second message is 10 s out; a NACK for the first must stop the send without waiting for it.
+        await using var device = new FakeDevice(m => m is KeyDownMessage ? NackReason.Disarmed : null);
+        await using var client = new MisdirectionClient(device.Stream, leaveOpen: true);
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var result = await MessageSender.SendAsync(client, Timed(0, 10_000), new SendSettings());
+
+        Assert.Equal(SendStatus.Nacked, result.Status);
+        Assert.Equal(1, result.Sent);
+        Assert.True(started.Elapsed < TimeSpan.FromSeconds(5), $"took {started.Elapsed}");
+        await WaitForAsync(() => device.Received.LastOrDefault() is PanicMessage);
+    }
+
+    [Fact]
+    public async Task FailingSourcePanicsAndRethrows()
+    {
+        await using var device = new FakeDevice();
+        await using var client = new MisdirectionClient(device.Stream, leaveOpen: true);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => MessageSender.SendAsync(client, Failing(), new SendSettings()));
+
+        await WaitForAsync(() => device.Received.Count == 2);
+        Assert.Equal([Drag[0], new PanicMessage()], device.Received);
+
+        static async IAsyncEnumerable<(TimeSpan At, Message Message)> Failing()
+        {
+            yield return (TimeSpan.Zero, Drag[0]);
+            await Task.Yield();
+            throw new InvalidOperationException("source broke");
+        }
+    }
+
+    [Fact]
     public async Task NackOnLastMessageIsCaughtByConfirmPing()
     {
         await using var device = new FakeDevice(m => m is KeyUpMessage ? NackReason.KeyRolloverFull : null);

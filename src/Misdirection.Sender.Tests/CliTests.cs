@@ -221,6 +221,140 @@ public sealed class CliTests : IDisposable
         Assert.DoesNotContain("DelayMessage", output);
     }
 
+    /// <summary>
+    /// Runs the CLI in the background with <paramref name="args"/>. The returned token source is Ctrl+C.
+    /// </summary>
+    private (Task<int> Run, CancellationTokenSource CtrlC) Start(Cli cli, params string[] args)
+    {
+        var cts = new CancellationTokenSource();
+        return (Task.Run(() => cli.RunAsync(args, cts.Token)), cts);
+    }
+
+    private static void Append(string file, params Message[] messages)
+    {
+        using var writer = ProtocolFileWriter.Append(file);
+        writer.Write(messages);
+    }
+
+    [Fact]
+    public async Task FollowSendsOnlyWhatIsAppendedUntilCtrlC()
+    {
+        await using var device = new FakeDevice();
+        var file = WriteFile(Tap);
+        var (run, ctrlC) = Start(CliFor(device), file, "-p", "COM9", "--follow");
+        using var _ = ctrlC;
+
+        // The handshake PING goes out after the existing content is read, so what's appended from
+        // here on is new.
+        await MessageSenderTests.WaitForAsync(() => device.Received.Count == 1);
+        var enter = new KeyDownMessage(HidUsage.Enter);
+        Append(file, enter);
+        await MessageSenderTests.WaitForAsync(() => device.Received.Count == 2);
+        ctrlC.Cancel();
+
+        Assert.Equal(ExitCodes.Cancelled, await run);
+        Assert.Equal([new PingMessage(), enter, new PanicMessage()], device.Received);
+        Assert.Contains("skipped the 2 message(s)", _out.ToString());
+    }
+
+    [Fact]
+    public async Task FollowFromStartSendsTheExistingContentFirst()
+    {
+        await using var device = new FakeDevice();
+        var file = WriteFile(Tap);
+        var (run, ctrlC) = Start(CliFor(device), file, "-p", "COM9", "--follow", "--from-start", "--no-ping");
+        using var _ = ctrlC;
+
+        await MessageSenderTests.WaitForAsync(() => device.Received.Count == 2);
+        Append(file, Tap);
+        await MessageSenderTests.WaitForAsync(() => device.Received.Count == 4);
+        ctrlC.Cancel();
+
+        Assert.Equal(ExitCodes.Cancelled, await run);
+        Assert.Equal([.. Tap, .. Tap], device.ReceivedExceptPings.SkipLast(1));
+    }
+
+    [Fact]
+    public async Task FollowRemembersTheLastMoveInSkippedContent()
+    {
+        await using var device = new FakeDevice();
+        var move = new MouseMoveMessage(100, 100);
+        var file = WriteFile([move]);
+        var (run, ctrlC) = Start(CliFor(device), file, "-p", "COM9", "--follow");
+        using var _ = ctrlC;
+
+        await MessageSenderTests.WaitForAsync(() => device.Received.Count == 1);
+        var press = new MouseButtonsMessage(MouseButtons.Left);
+        Append(file, press);
+        await MessageSenderTests.WaitForAsync(() => device.Received.Count == 3);
+        ctrlC.Cancel();
+
+        await run;
+        Assert.Equal([new PingMessage(), move, press, new PanicMessage()], device.Received);
+    }
+
+    [Fact]
+    public async Task FollowStopsOnNackWithoutAnotherMessage()
+    {
+        await using var device = new FakeDevice(m => m is KeyUpMessage ? NackReason.Disarmed : null);
+        var file = WriteFile([]);
+        var (run, ctrlC) = Start(CliFor(device), file, "-p", "COM9", "--follow");
+        using var _ = ctrlC;
+
+        await MessageSenderTests.WaitForAsync(() => device.Received.Count == 1);
+        Append(file, Tap);
+
+        Assert.Equal(ExitCodes.Nacked, await run.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Contains("NACK Disarmed", _err.ToString());
+        Assert.IsType<PanicMessage>(device.Received[^1]);
+    }
+
+    [Fact]
+    public async Task FollowReportsAMalformedAppendAndPanics()
+    {
+        await using var device = new FakeDevice();
+        var file = WriteFile(Tap);
+        var (run, ctrlC) = Start(CliFor(device), file, "-p", "COM9", "--follow");
+        using var _ = ctrlC;
+
+        await MessageSenderTests.WaitForAsync(() => device.Received.Count == 1);
+        File.AppendAllBytes(file, [0x00]);
+
+        Assert.Equal(ExitCodes.Error, await run.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Contains("Expected start of frame", _err.ToString());
+        await MessageSenderTests.WaitForAsync(() => device.Received.LastOrDefault() is PanicMessage);
+    }
+
+    [Fact]
+    public async Task FollowWithAMalformedFileSendsNothing()
+    {
+        await using var device = new FakeDevice();
+        var file = WriteFile(Tap);
+        File.AppendAllBytes(file, [0x00]);
+
+        var code = await CliFor(device).RunAsync([file, "-p", "COM9", "--follow"]);
+
+        Assert.Equal(ExitCodes.Error, code);
+        Assert.Empty(device.Received);
+    }
+
+    [Fact]
+    public async Task FollowDryRunListsAppendedMessages()
+    {
+        var file = WriteFile(Tap);
+        var cli = new Cli(_out, _err, (_, _) => throw new InvalidOperationException("port opened"));
+        var (run, ctrlC) = Start(cli, file, "--follow", "--dry-run");
+        using var _ = ctrlC;
+
+        await MessageSenderTests.WaitForAsync(() => _out.ToString().Contains("Following"));
+        Append(file, new KeyDownMessage(HidUsage.Enter));
+        await MessageSenderTests.WaitForAsync(() => _out.ToString().Contains("KeyDownMessage"));
+        ctrlC.Cancel();
+
+        Assert.Equal(ExitCodes.Cancelled, await run);
+        Assert.Contains("Stopped after 1 message(s)", _err.ToString());
+    }
+
     [Fact]
     public async Task BadArgumentsExitWithUsageCode()
     {

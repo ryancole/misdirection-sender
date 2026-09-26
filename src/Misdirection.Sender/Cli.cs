@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO.Ports;
+using System.Runtime.CompilerServices;
 using Misdirection.Client;
 
 namespace Misdirection.Sender;
@@ -14,7 +15,8 @@ internal static class ExitCodes
 }
 
 /// <summary>
-/// The program proper: parse arguments, load and validate the file, then open the port and send.
+/// The program proper: parse arguments, load and validate the file (or start following it), then
+/// open the port and send.
 /// The port opener is injectable so tests can hand in a client over an in-memory stream.
 /// </summary>
 internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int, MisdirectionClient>? openPort = null)
@@ -46,6 +48,13 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
         if (options.ListPorts)
             return ListPorts();
 
+        return options.Follow
+            ? await FollowAsync(options, ct)
+            : await PlayAsync(options, ct);
+    }
+
+    private async Task<int> PlayAsync(SenderOptions options, CancellationToken ct)
+    {
         // Read the whole file before touching the port, so a malformed file sends nothing at all.
         var file = options.File!;
         IReadOnlyList<(TimeSpan At, Message Message)> messages;
@@ -71,15 +80,7 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
         if (options.MoveBeforeClick)
             messages = MoveBeforeClick.Apply(messages);
 
-        var settings = new SendSettings
-        {
-            Speed = options.Speed,
-            IgnoreTiming = options.IgnoreTiming,
-            MinimumGap = options.Delay,
-            ScreenSize = options.ScreenSize,
-            StopOnNack = !options.ContinueOnNack,
-            ConfirmTimeout = options.Ping ? TimeSpan.FromSeconds(2) : null,
-        };
+        var settings = Settings(options);
 
         stdout.WriteLine(Describe(file, messages, options));
 
@@ -90,6 +91,122 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
             return ExitCodes.Ok;
         }
 
+        return await OpenAndSendAsync(options, settings, messages.ToAsyncEnumerable(), messages.Count, ct);
+    }
+
+    /// <summary>
+    /// <c>tail -f</c>: reads what the file already holds, then sends each message as it lands, until
+    /// Ctrl+C or a NACK. The file's timing is ignored; only <c>--delay</c> paces.
+    /// </summary>
+    private async Task<int> FollowAsync(SenderOptions options, CancellationToken ct)
+    {
+        var file = options.File!;
+        FileFollower follower;
+        try
+        {
+            follower = new FileFollower(file)
+            {
+                Skipped = (m, offset) => stderr.WriteLine(
+                    $"warning: skipping {m.Type} at offset {offset}; the device doesn't accept device-to-host messages."),
+                Truncated = () => stderr.WriteLine($"{file}: file truncated; following from its start."),
+            };
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            stderr.WriteLine($"error: {file}: {ex.Message}");
+            return ExitCodes.Error;
+        }
+
+        using (follower)
+        {
+            // Read what's there before touching the port, so a file that's already malformed sends nothing.
+            IReadOnlyList<Message> existing;
+            try
+            {
+                existing = follower.ReadExisting();
+            }
+            catch (FollowException ex)
+            {
+                stderr.WriteLine($"error: {file}: {ex.Message}");
+                return ExitCodes.Error;
+            }
+
+            var inserter = options.MoveBeforeClick ? new MoveBeforeClick() : null;
+            if (options.FromStart)
+            {
+                stdout.WriteLine($"Following {file} from the start ({existing.Count} message(s) so far). Ctrl+C to stop.");
+            }
+            else
+            {
+                // Not sent, but the inserter still learns the last position, so a click that lands
+                // later gets a move to it.
+                foreach (var m in existing)
+                    inserter?.Skip(m);
+                stdout.WriteLine($"Following {file}; skipped the {existing.Count} message(s) already in it. Ctrl+C to stop.");
+                existing = [];
+            }
+
+            var source = Source();
+
+            if (options.DryRun)
+            {
+                var n = 0;
+                try
+                {
+                    await foreach (var (_, m) in source.WithCancellation(ct))
+                        stdout.WriteLine($"{++n,6}  {m}");
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    stderr.WriteLine($"Stopped after {n} message(s).");
+                    return ExitCodes.Cancelled;
+                }
+                catch (FollowException ex)
+                {
+                    stderr.WriteLine($"error: {file}: {ex.Message}");
+                    return ExitCodes.Error;
+                }
+            }
+
+            var settings = Settings(options) with { IgnoreTiming = true };
+            return await OpenAndSendAsync(options, settings, source, total: null, ct);
+
+            async IAsyncEnumerable<(TimeSpan At, Message Message)> Source([EnumeratorCancellation] CancellationToken token = default)
+            {
+                foreach (var m in existing)
+                {
+                    foreach (var toSend in Expand(m))
+                        yield return (TimeSpan.Zero, toSend);
+                }
+                await foreach (var m in follower.FollowAsync(token))
+                {
+                    foreach (var toSend in Expand(m))
+                        yield return (TimeSpan.Zero, toSend);
+                }
+            }
+
+            IEnumerable<Message> Expand(Message m) => inserter?.Next(m) ?? [m];
+        }
+    }
+
+    private static SendSettings Settings(SenderOptions options) => new()
+    {
+        Speed = options.Speed,
+        IgnoreTiming = options.IgnoreTiming,
+        MinimumGap = options.Delay,
+        ScreenSize = options.ScreenSize,
+        StopOnNack = !options.ContinueOnNack,
+        ConfirmTimeout = options.Ping ? TimeSpan.FromSeconds(2) : null,
+    };
+
+    /// <param name="total">How many messages <paramref name="messages"/> holds, or null when following.</param>
+    private async Task<int> OpenAndSendAsync(
+        SenderOptions options,
+        SendSettings settings,
+        IAsyncEnumerable<(TimeSpan At, Message Message)> messages,
+        int? total,
+        CancellationToken ct)
+    {
         var port = options.Port!;
         MisdirectionClient client;
         try
@@ -106,7 +223,7 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
         {
             try
             {
-                return await SendAsync(client, port, messages, options, settings, ct);
+                return await SendAsync(client, port, messages, total, options, settings, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -118,13 +235,19 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
                 stderr.WriteLine($"error: lost {port}: {ex.Message}");
                 return ExitCodes.Error;
             }
+            catch (FollowException ex)
+            {
+                stderr.WriteLine($"error: {options.File}: {ex.Message} Stopped and sent PANIC.");
+                return ExitCodes.Error;
+            }
         }
     }
 
     private async Task<int> SendAsync(
         MisdirectionClient client,
         string port,
-        IReadOnlyList<(TimeSpan At, Message Message)> messages,
+        IAsyncEnumerable<(TimeSpan At, Message Message)> messages,
+        int? total,
         SenderOptions options,
         SendSettings settings,
         CancellationToken ct)
@@ -159,13 +282,14 @@ internal sealed class Cli(TextWriter stdout, TextWriter stderr, Func<string, int
         foreach (var nack in result.Nacks)
             stderr.WriteLine($"NACK {nack.Reason} (after message {nack.SentBefore})");
 
+        var progress = total is { } t ? $"{result.Sent} of {t}" : $"{result.Sent}";
         switch (result.Status)
         {
             case SendStatus.Cancelled:
-                stderr.WriteLine($"Cancelled after {result.Sent} of {messages.Count} message(s); sent PANIC.");
+                stderr.WriteLine($"Cancelled after {progress} message(s); sent PANIC.");
                 return ExitCodes.Cancelled;
             case SendStatus.Nacked:
-                stderr.WriteLine($"Stopped after {result.Sent} of {messages.Count} message(s) on NACK; sent PANIC.");
+                stderr.WriteLine($"Stopped after {progress} message(s) on NACK; sent PANIC.");
                 return ExitCodes.Nacked;
         }
 

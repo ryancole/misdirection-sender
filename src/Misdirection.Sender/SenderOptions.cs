@@ -12,6 +12,8 @@ internal sealed record SenderOptions
     public TimeSpan Delay { get; init; }
     public double Speed { get; init; } = 1;
     public bool IgnoreTiming { get; init; }
+    public bool Follow { get; init; }
+    public bool FromStart { get; init; }
     public (ushort Width, ushort Height)? ScreenSize { get; init; }
     public bool ContinueOnNack { get; init; }
     public bool MoveBeforeClick { get; init; } = true;
@@ -32,18 +34,25 @@ internal static class OptionsParser
         Usage:
           misdirection-sender <file.msdr> --port <name> [options]
           misdirection-sender <file.msdr> --dry-run
+          misdirection-sender <file.msdr> --follow --port <name> [options]
           misdirection-sender --list-ports
 
         Sends every message in a .msdr protocol file to a misdirection device, in order, at
-        the pace recorded in the file's delay records.
+        the pace recorded in the file's delay records. With --follow, sends each message as it
+        is appended to the file instead, like tail -f, until Ctrl+C.
 
         Options:
           -p, --port <name>       Serial port the device is on, e.g. COM5
           -b, --baud <rate>       Baud rate (default 115200)
           -x, --speed <factor>    Playback speed: 2 is twice as fast, 0.5 half speed (default 1)
               --ignore-timing     Ignore the file's delays and send as fast as --delay allows
+          -f, --follow            Keep the file open and send each message as it is appended,
+                                  ignoring the file's timing. Skips what the file already
+                                  holds unless --from-start is given.
+              --from-start        With --follow, send what the file already holds first
           -d, --delay <ms>        Minimum milliseconds between messages (default 0). Applies on
-                                  top of the file's timing, and alone with --ignore-timing.
+                                  top of the file's timing, and alone with --ignore-timing
+                                  or --follow.
           -s, --screen <WxH>      Send SCREEN_SIZE first, e.g. 2560x1440
               --continue-on-nack  Keep sending after the device NACKs (default: stop and PANIC)
               --no-move-before-click
@@ -52,7 +61,8 @@ internal static class OptionsParser
                                   lands where it was recorded)
               --no-ping           Skip the PING handshake before sending and the PING that
                                   confirms delivery afterwards
-          -n, --dry-run           Validate the file and list its messages; no port is opened
+          -n, --dry-run           Validate the file and list its messages; no port is opened.
+                                  With --follow, lists messages as they are appended.
           -v, --verbose           Print each message as it is sent
               --list-ports        List serial ports and exit
           -h, --help              Show this help
@@ -91,6 +101,12 @@ internal static class OptionsParser
                     break;
                 case "--ignore-timing":
                     o = o with { IgnoreTiming = true };
+                    break;
+                case "-f" or "--follow":
+                    o = o with { Follow = true };
+                    break;
+                case "--from-start":
+                    o = o with { FromStart = true };
                     break;
                 case "-s" or "--screen":
                     o = o with { ScreenSize = ParseScreenSize(Value()) };
@@ -135,6 +151,10 @@ internal static class OptionsParser
             throw new UsageException("No file given.");
         if (o.Port is null && !o.DryRun)
             throw new UsageException("No serial port given. Pass --port (see --list-ports), or --dry-run to only inspect the file.");
+        if (o.FromStart && !o.Follow)
+            throw new UsageException("--from-start only applies with --follow.");
+        if (o.Follow && o.Speed != 1)
+            throw new UsageException("--speed has no effect with --follow, which ignores the file's timing.");
         return o;
     }
 
