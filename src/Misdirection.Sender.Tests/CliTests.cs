@@ -97,6 +97,53 @@ public sealed class CliTests : IDisposable
     }
 
     [Fact]
+    public async Task FolderSendsItsMostRecentlyWrittenFile()
+    {
+        await using var device = new FakeDevice();
+        var older = WriteFile([new KeyDownMessage(HidUsage.Enter)]);
+        File.SetLastWriteTimeUtc(older, DateTime.UtcNow.AddMinutes(-5));
+        var newer = WriteFile(Tap);
+        File.WriteAllText(Path.Combine(_dir, "notes.txt"), "not a recording");
+
+        var code = await CliFor(device).RunAsync([_dir, "-p", "COM9"]);
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Equal(Tap, device.ReceivedExceptPings);
+        Assert.Contains($"Using {newer}", _out.ToString());
+    }
+
+    [Fact]
+    public async Task FolderWithNoRecordingsIsAnError()
+    {
+        File.WriteAllText(Path.Combine(_dir, "notes.txt"), "not a recording");
+
+        var code = await new Cli(_out, _err).RunAsync([_dir, "--dry-run"]);
+
+        Assert.Equal(ExitCodes.Error, code);
+        Assert.Contains("no .msdr files", _err.ToString());
+    }
+
+    [Fact]
+    public async Task FollowWithAFolderFollowsItsLatestFile()
+    {
+        await using var device = new FakeDevice();
+        var older = WriteFile([]);
+        File.SetLastWriteTimeUtc(older, DateTime.UtcNow.AddMinutes(-5));
+        var newer = WriteFile([]);
+        var (run, ctrlC) = Start(CliFor(device), _dir, "-p", "COM9", "--follow");
+        using var _ = ctrlC;
+
+        await MessageSenderTests.WaitForAsync(() => device.Received.Count == 1);
+        Append(older, new KeyDownMessage(HidUsage.Enter));
+        Append(newer, Tap[0]);
+        await MessageSenderTests.WaitForAsync(() => device.Received.Count == 2);
+        ctrlC.Cancel();
+
+        Assert.Equal(ExitCodes.Cancelled, await run);
+        Assert.Equal([new PingMessage(), Tap[0], new PanicMessage()], device.Received);
+    }
+
+    [Fact]
     public async Task MissingFileIsAnError()
     {
         var code = await new Cli(_out, _err).RunAsync([Path.Combine(_dir, "nope.msdr"), "--dry-run"]);
