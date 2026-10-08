@@ -109,6 +109,23 @@ message is sent at its scheduled time or `--delay` ms after the previous one,
 whichever is later. With `--ignore-timing` it's the only pacing. Files without delay
 records are sent as fast as possible.
 
+## Checking a device
+
+`etc\circle.ps1` moves the target's mouse in a circle: it writes a `.msdr` file of moves
+(`etc\circle.cs`) and plays it with the sender, so it takes the same path a recording does.
+
+```
+etc\circle.ps1 -Port COM5 -Screen 2560x1440           # absolute moves, centred on the screen
+etc\circle.ps1 -Port COM5 -Relative -Radius 100       # MOUSE_MOVE_REL from wherever the pointer is
+etc\circle.ps1 -DryRun                                # list the messages only
+```
+
+Absolute moves need the target's real resolution in `-Screen` (default 1920x1080), or the
+circle comes out stretched or off-centre. Relative moves don't depend on it, so if relative
+works and absolute doesn't, the screen size is the suspect. `-Radius`, `-Loops` and
+`-SecondsPerLoop` shape the circle. `-Verbose` prints each message as it's sent, and any
+other sender option can follow the script's own, with no `--` before it (e.g. `--delay 5`).
+
 ## Layout
 
 ```
@@ -130,4 +147,6 @@ etc/
   test.ps1                     dotnet test [-Filter name]
   run.ps1                      dotnet run, arguments passed through
   publish.ps1                  self-contained single-file exe into artifacts/<rid>
+  circle.ps1                   move the mouse in a circle on the target (see Checking a device)
+  circle.cs                    writes the circle's .msdr file
 ```
